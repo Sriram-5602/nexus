@@ -1,0 +1,188 @@
+# Nexus — Project Rules for Cursor
+
+You are building **Nexus**, a self-hosted AI-powered family operating system.
+This file defines conventions you MUST follow across ALL prompts.
+
+---
+
+## PROJECT OVERVIEW
+
+Nexus is a polyglot platform with 11 sub-projects using 3 backend stacks:
+- **Java Spring Boot** (7 modules): Nexus Core, DocSense, MedPulse, Ledger, Timeline, Vault, Gallery, Atlas
+- **Python FastAPI** (1 service): Cortex (AI Engine) — separate Docker container
+- **Node.js Express + Socket.io** (1 service): Thread (Chat) — separate Docker container
+- **Grafana** (monitoring): embedded in Console admin panel
+
+Runs entirely on a home Windows machine (i5-6200U, 8GB RAM, SSD) via Docker.
+Exposed via Cloudflare Tunnel. No Vercel. No cloud servers.
+
+---
+
+## HARDWARE CONSTRAINTS (CRITICAL)
+
+- **8GB RAM total**. ~3.9GB available for Docker.
+- EVERY Docker container MUST have mem_limit.
+- Spring Boot: -Xmx512m (512MB max heap)
+- Cortex (FastAPI): mem_limit 200m
+- Thread (Node.js): mem_limit 180m, --max-old-space-size=128
+- Grafana: mem_limit 250m
+- Ollama: OLLAMA_KEEP_ALIVE=2m (unload models after 2 min idle)
+- Default AI model: tinyllama (~700MB). On-demand loading only.
+- n8n: OPTIONAL. Disabled by default (Docker profile). Use Spring @Scheduled instead if RAM tight.
+- Redis: maxmemory 64mb
+- PostgreSQL: shared_buffers=128MB
+
+---
+
+## HOSTING — EVERYTHING ON HOME MACHINE
+
+- Nginx serves React static files (dist/) at /
+- Nginx proxies: /api/v1/chat/* → Thread (Node.js :3000), /cortex/* → Cortex (FastAPI :8000), /api/* → Spring Boot (:8080), /ws/chat/* → Thread, /ws/* → Spring Boot, /grafana/ → Grafana (HOME only)
+- NO Vercel. NO cloud frontend. NO separate frontend server.
+- Cloud services: Cloudflare Tunnel (public URL), GitHub (code+CI/CD), SendGrid (email)
+
+---
+
+## 3 BACKEND STACKS — HOW THEY COMMUNICATE
+
+### Spring Boot (Java) — The Core
+- 7 modules in one app: Core, DocSense, MedPulse, Ledger, Timeline, Vault, Gallery, Atlas
+- Calls Cortex via REST: http://cortex:8000/cortex/...
+- Publishes events to Redis pub/sub for Thread to consume
+- Subscribes to Redis pub/sub for chat activity from Thread
+
+### Cortex (Python FastAPI) — AI Engine
+- Separate container at port 8000
+- Endpoints: /cortex/embed, /generate (SSE), /classify, /extract-entities, /ocr, /status
+- Connects directly to: Ollama (HTTP), PostgreSQL (pgvector), Redis (cache)
+- Called BY Spring Boot, never calls Spring Boot
+
+### Thread (Node.js Express + Socket.io) — Chat
+- Separate container at port 3000
+- REST endpoints for message CRUD + Socket.io for real-time
+- Verifies same JWTs as Spring Boot (shared secret key)
+- Connects to: PostgreSQL (chat schema), Redis (pub/sub + Socket.io adapter)
+- Publishes chat activity to Redis → Spring Boot creates Feed entries
+
+### All three share:
+- Same PostgreSQL database (different schemas)
+- Same Redis instance
+- Same JWT secret (verify tokens independently)
+
+---
+
+## 11 SUB-PROJECTS
+
+| Name | Stack | What It Does |
+|------|-------|-------------|
+| Nexus Core | Java Spring Boot | Auth, JWT, roles, spaces, WiFi security |
+| Cortex | Python FastAPI | AI engine (Ollama, embeddings, OCR, entity extraction) |
+| DocSense | Java Spring Boot | Document upload → OCR → classify → extract → auto-actions |
+| MedPulse | Java Spring Boot | Medicine tracker, push reminders, adherence |
+| Ledger | Java Spring Boot | Expenses, receipt scanning, budgets |
+| Timeline | Java Spring Boot | Smart calendar, WebSocket sync, iCal |
+| Thread | Node.js Express + Socket.io | Real-time chat, references, DMs |
+| Vault | Java Spring Boot | Password vault, AES-256-GCM, WiFi-only |
+| Gallery | Java Spring Boot | Photos, AI tagging, presigned URLs |
+| Atlas | Java Spring Boot | Semantic search, RAG pipeline |
+| Console | Java Spring Boot + Grafana | Admin panel, monitoring, WiFi-only |
+
+---
+
+## ROLES & PERMISSIONS
+
+- **ADMIN**: Full access. Participates in Family Space as member. Views all Friend Groups.
+- **FAMILY_MEMBER**: All family modules.
+- **FRIEND**: Their specific Friend Group only (Feed, Calendar, Expense Splitter, Chat).
+- **GUEST/PUBLIC**: Read-only project showcase.
+
+---
+
+## NETWORK TRUST TIERS
+
+- **REMOTE**: Via Cloudflare Tunnel. All except Vault and Console.
+- **HOME**: WiFi (192.168.0.0/16) or WireGuard VPN (10.66.66.0/24). Full access.
+- **LOCALHOST**: Server only. Direct DB/Docker access.
+
+NetworkSecurityFilter blocks /api/v1/vault/** and /api/v1/admin/** for REMOTE.
+Configurable in application.yml: `nexus.security.home-subnets`
+
+---
+
+## CODING CONVENTIONS
+
+### Java (Spring Boot — 7 modules)
+- Controller → Service → Repository
+- ALL endpoints return ApiResponse<T>: {success, message, data, timestamp}
+- Lombok + MapStruct. GlobalExceptionHandler.
+- Spring Events for cross-module communication within Java
+- Redis pub/sub for communication WITH Thread (Node.js)
+- REST calls for communication WITH Cortex (Python)
+- CortexClient wrapper in shared/ package for all Cortex HTTP calls
+
+### Python (FastAPI — Cortex)
+- Async endpoints with uvicorn
+- Pydantic models for request/response validation
+- httpx for async Ollama calls
+- psycopg2 for PostgreSQL + pgvector
+- redis-py for caching and queue
+
+### Node.js (Express + Socket.io — Thread)
+- Express for REST, Socket.io for real-time
+- jsonwebtoken for JWT verification (same secret as Spring Boot)
+- ioredis for Redis pub/sub + Socket.io adapter
+- pg (node-postgres) for PostgreSQL
+
+### Frontend (React — one SPA for everything)
+- Functional components + hooks. Zustand global, TanStack Query server.
+- Axios for Spring Boot API calls. Socket.io-client for Thread chat.
+- Tailwind only. Framer Motion. Dark/light mode.
+
+### Design System
+- Fonts: Inter (body), JetBrains Mono (code), Plus Jakarta Sans (headings)
+- Primary: Slate-900, Accent: Indigo-500, Success: Emerald-500, Warning: Amber-500, Danger: Rose-500
+- 8px radius, 12px cards, 16px modals. Sidebar 256px/64px.
+
+---
+
+## CHAT DM RULES
+
+- Family can DM family. Friends within same group can DM each other.
+- Any user can DM admin. Group A cannot DM Group B.
+- Verify shared space before creating DIRECT channel.
+
+---
+
+## KEY PIPELINE
+
+Upload → MinIO → Cortex OCR (Python) → Cortex classify → Cortex extract →
+Spring Events → MedPulse/Ledger/Timeline auto-create → notifications → Cortex embed for Atlas
+
+---
+
+## UI DESIGN DIRECTION
+
+- Theme: Dark glassmorphism (#07080d background)
+- Cards: backdrop-filter blur, rgba white backgrounds, 
+  subtle white borders
+- Accents: Gradient-based with glow shadows 
+  (box-shadow with accent color at 25-35% opacity)
+- 4 views: Admin (full access), Family (daily use), 
+  Friends (group social), Guest (project showcase)
+- View switcher in sidebar with pill-style toggle
+- Each module has its own accent gradient
+- Reference mockup: docs/design/nexus-mockup-v3.jsx
+- Build with Tailwind — do NOT use inline styles
+- Make it MORE polished than the reference, not less
+
+## WHAT NOT TO DO
+
+- Do NOT use Vercel. Nginx serves frontend.
+- Do NOT call Ollama from anywhere except Cortex (Python).
+- Do NOT create WebSocket chat in Spring Boot. Thread (Node.js) handles all chat.
+- Do NOT use localStorage for JWT. Memory only.
+- Do NOT expose MinIO. Presigned URLs only.
+- Do NOT hardcode IPs. Configurable subnets.
+- Do NOT keep Ollama models loaded. On-demand with 2min timeout.
+- Do NOT create containers without mem_limit.
+- Do NOT use CSS modules or styled-components. Tailwind only.
