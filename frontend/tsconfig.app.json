@@ -1,34 +1,91 @@
 {
   "compilerOptions": {
+
+    // Cache file for incremental type checking — speeds up re-checks by
+    // only re-checking files that changed since the last check
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+
+    // Compile TypeScript down to ES2022 JavaScript — modern enough
+    // for all current browsers, no need to go lower
     "target": "ES2022",
+
+    // Use native JS spec behavior for class fields — required for
+    // correct behavior with React and modern JS class syntax
     "useDefineForClassFields": true,
+
+    // Type definitions to include:
+    // ES2022 = JS built-ins (Promise, Array, Map...)
+    // DOM = browser APIs (document, window, fetch...)
+    // DOM.Iterable = lets you loop over DOM collections with for...of
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+
+    // Use ES module syntax (import/export) — Vite handles the actual bundling
     "module": "ESNext",
+
+    // Adds Vite-specific types: import.meta.env, import.meta.hot,
+    // and importing non-JS assets like SVGs and images
     "types": ["vite/client"],
+
+    // Skip type checking inside node_modules — third party type errors
+    // are not your problem and can't be fixed by you
     "skipLibCheck": true,
 
-    /* Path aliases */
+    /* Path aliases — must match the alias in vite.config.ts */
+    // Sets project root as the base for path resolution
     "baseUrl": ".",
     "paths": {
+      // Maps @/anything to src/anything
+      // Allows: import X from '@/components/X'
       "@/*": ["src/*"]
     },
 
-    /* Bundler mode */
+    /* Bundler mode — tells TypeScript to resolve modules the same way Vite does */
     "moduleResolution": "bundler",
+
+    // Allows writing imports with explicit .ts/.tsx extensions
     "allowImportingTsExtensions": true,
+
+    // Enforces 'import type' for type-only imports so they're
+    // fully erased at build time and never appear in JS output
     "verbatimModuleSyntax": true,
+
+    // Forces every file to be treated as a module with its own scope
+    // even if it has no import/export statements
     "moduleDetection": "force",
+
+    // TypeScript only type-checks — never outputs .js files
+    // Vite handles all actual compilation
     "noEmit": true,
+
+    // Use React 17+ JSX transform — no need to import React
+    // at the top of every component file
     "jsx": "react-jsx",
 
-    /* Linting */
+    /* Linting — code quality rules enforced at compile time */
+
+    // Enables all strict type checks in one go:
+    // no implicit any, strict null checks, strict function types etc.
     "strict": true,
+
+    // Error if you declare a variable and never use it
     "noUnusedLocals": true,
+
+    // Error if a function parameter is declared but never used
     "noUnusedParameters": true,
+
+    // Only allow TypeScript syntax that can be fully erased to valid JS
     "erasableSyntaxOnly": true,
+
+    // Every switch case must end with break/return/throw —
+    // prevents accidental fallthrough bugs
     "noFallthroughCasesInSwitch": true,
+
+    // Flags side-effect-only imports (import './file') to ensure
+    // they're intentional and not accidentally left in
     "noUncheckedSideEffectImports": true
   },
+
+  // Only type-check files inside src/ — everything outside
+  // (vite.config.ts etc.) is handled by tsconfig.node.json
   "include": ["src"]
 }

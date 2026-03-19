@@ -1,0 +1,59 @@
+services:
+
+  # ── Disable production-only services ──────────────────────────
+  # 'never' is a profile name that is never activated,
+  # which effectively disables these services in dev
+
+  cloudflared:
+    profiles:
+      - never       # disabled — you don't want your local machine exposed to the internet
+
+  wireguard:
+    profiles:
+      - never       # disabled — no VPN needed when you're already local
+
+  nginx:
+    profiles:
+      - never       # disabled — Vite dev server replaces nginx locally:
+                    # serves React with hot reload + proxies /api to Spring Boot
+
+  # ── Spring Boot — with remote debug port ──────────────────────
+  nexus-api:
+    environment:
+      # -Xmx512m -Xms256m        → JVM heap limits (same as prod)
+      # -agentlib:jdwp=...       → enables Java debug agent
+      #   transport=dt_socket    → communicate over TCP
+      #   server=y               → JVM is the server, IDE connects to it
+      #   suspend=n              → don't freeze on startup waiting for debugger
+      #   address=*:5005         → listen on port 5005 for IDE connection
+      JAVA_OPTS: -Xmx512m -Xms256m -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+      SPRING_PROFILES_ACTIVE: dev   # loads application-dev.yml on top of application.yml
+    ports:
+      - "8080:8080"   # API port
+      - "5005:5005"   # Java remote debug port — connect IntelliJ here to set breakpoints
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+
+  # ── Python AI service — development mode ──────────────────────
+  cortex-service:
+    environment:
+      ENVIRONMENT: development    # Python code reads this — enables verbose logging, auto-reload etc.
+    build:
+      context: ../cortex-service
+      dockerfile: Dockerfile
+
+  # ── Node.js service — with inspector port ─────────────────────
+  thread-service:
+    environment:
+      NODE_ENV: development       # standard Node convention — enables detailed errors, disables caching
+      # --max-old-space-size=128  → cap Node heap at 128MB (same as prod)
+      # --inspect=0.0.0.0:9229   → enable Node debugger on port 9229
+      #   0.0.0.0 means listen on all interfaces so VSCode/Chrome outside container can connect
+      NODE_OPTIONS: --max-old-space-size=128 --inspect=0.0.0.0:9229
+    ports:
+      - "3000:3000"   # API port
+      - "9229:9229"   # Node.js inspector port — connect VSCode or Chrome DevTools here
+    build:
+      context: ../thread-service
+      dockerfile: Dockerfile

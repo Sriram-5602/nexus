@@ -1,42 +1,292 @@
+# =============================================================================
+# application.yml — Runtime configuration for the Nexus Spring Boot app.
+#
+# WHAT THIS FILE IS:
+#   While build.gradle.kts tells Gradle HOW TO BUILD the app,
+#   this file tells Spring HOW TO RUN it — database address, ports,
+#   secrets, feature settings. Everything that differs between
+#   local dev, staging, and production lives here.
+#
+# HOW SPRING READS THIS FILE:
+#   1. You run ./gradlew bootRun
+#   2. Spring Boot starts up
+#   3. It looks for application.yml in src/main/resources/ (this file)
+#   4. Reads every key-value pair into its configuration system
+#   5. Each starter (web, data-jpa, redis...) listens for its own keys
+#   6. Everything gets auto-configured — no manual wiring needed
+#
+# THE ${VAR:default} PATTERN (used throughout this file):
+#   Syntax:  ${ENVIRONMENT_VARIABLE:fallback_value}
+#   Meaning: "Read this env var at runtime. If it's not set, use the fallback."
+#
+#   Example: username: ${DB_USERNAME:nexus}
+#     - Local dev   → DB_USERNAME not set → Spring uses "nexus"
+#     - Production  → DB_USERNAME=prod_secret → Spring uses "prod_secret"
+#
+#   This is how secrets stay OUT of source code. The file is safe to
+#   commit. Real credentials are injected as environment variables on
+#   the server (or via Docker, Kubernetes secrets, etc.)
+#
+# YAML SYNTAX REMINDER:
+#   Indentation (2 spaces) = nesting. spring.datasource.url in properties
+#   becomes:
+#     spring:
+#       datasource:
+#         url: ...
+# =============================================================================
+
 spring:
+
   application:
     name: nexus
+    # Names this application instance.
+    # Shows up in: log output, /actuator/info, distributed tracing (Zipkin/Jaeger).
+    # Purely informational — doesn't affect functionality.
 
+  # ---------------------------------------------------------------------------
+  # DATASOURCE — How Spring connects to PostgreSQL
+  # These values are passed to HikariCP, the connection pool bundled with
+  # spring-boot-starter-data-jpa. HikariCP maintains a pool of open DB
+  # connections so the app doesn't open/close a connection on every request.
+  # ---------------------------------------------------------------------------
   datasource:
     url: jdbc:postgresql://localhost:5432/nexus
-    username: ${DB_USERNAME:nexus}
-    password: ${DB_PASSWORD:nexus}
-    driver-class-name: org.postgresql.Driver
+    # JDBC connection string — broken down:
+    #   jdbc:           → protocol prefix, always present for Java DB connections
+    #   postgresql://   → which driver to use (matches the runtimeOnly dep in build.gradle.kts)
+    #   localhost:5432  → host:port of the Postgres server (5432 is Postgres default port)
+    #   /nexus          → the database name to connect to
+    # In production this becomes something like:
+    #   jdbc:postgresql://db.yourserver.com:5432/nexus_prod
 
+    username: ${DB_USERNAME:nexus}
+    # DB user to authenticate as.
+    # Reads the DB_USERNAME environment variable — falls back to "nexus" locally.
+    # In production: set DB_USERNAME=your_prod_db_user on the server.
+
+    password: ${DB_PASSWORD:nexus}
+    # DB password for the above user.
+    # NEVER hardcode a real password here — always use the ${VAR:default} pattern.
+    # The fallback "nexus" is only safe because it's your local dev database.
+
+    driver-class-name: org.postgresql.Driver
+    # The fully-qualified class name of the JDBC driver.
+    # Spring uses this to load the correct driver from the classpath.
+    # This class comes from the `runtimeOnly("org.postgresql:postgresql")` dep
+    # in build.gradle.kts — that JAR must be present or the app won't start.
+
+  # ---------------------------------------------------------------------------
+  # JPA — Controls Hibernate ORM behavior
+  # JPA (Java Persistence API) is the standard. Hibernate is the implementation.
+  # Hibernate translates between your @Entity Java classes and database rows.
+  # ---------------------------------------------------------------------------
   jpa:
     hibernate:
       ddl-auto: update
+      # DDL = Data Definition Language (CREATE TABLE, ALTER TABLE, DROP TABLE).
+      # Controls what Hibernate does to your database schema on startup.
+      #
+      # Available options:
+      #   create      → DROP all tables, recreate from scratch — DESTROYS ALL DATA
+      #   create-drop → Like create, also drops on shutdown — for tests only
+      #   update      → Adds missing tables/columns, never deletes anything — safe for dev
+      #   validate    → Checks schema matches your @Entity classes, crashes if mismatch — prod
+      #   none        → Does nothing, you manage schema with Flyway/Liquibase — prod best practice
+      #
+      # `update` is fine for active development.
+      # Change to `validate` or `none` before going to production.
+
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
-    open-in-view: false
+        # Tells Hibernate which SQL "dialect" (flavour) to generate.
+        # PostgreSQL has unique syntax: ILIKE, RETURNING, JSONB, arrays, etc.
+        # Without this, Hibernate generates generic ANSI SQL that may miss
+        # Postgres-specific optimizations or fail on certain queries.
+        # If you ever switch to MySQL, you'd change this to MySQLDialect.
 
+    open-in-view: false
+    # IMPORTANT performance setting. Here's what it does:
+    #
+    # Default (true):  Hibernate keeps the DB session (connection) open for the
+    #                  entire HTTP request lifecycle, including after your service
+    #                  method returns, all the way until the HTTP response is sent.
+    #                  This causes subtle N+1 query bugs and holds connections
+    #                  longer than needed under load.
+    #
+    # false:           DB session closes when your @Service method returns.
+    #                  Forces you to load all needed data in the service layer.
+    #                  This is the correct architecture — controllers and views
+    #                  should never trigger lazy DB loads.
+    #
+    # Spring Boot even logs a WARNING if you leave this as true.
+
+  # ---------------------------------------------------------------------------
+  # REDIS — Connection to your Redis instance
+  # The spring-boot-starter-data-redis starter reads these to create
+  # a Lettuce connection (Lettuce is the async Redis client it bundles).
+  # ---------------------------------------------------------------------------
   data:
     redis:
       host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      # Redis server hostname. Falls back to localhost for local dev.
+      # In production: REDIS_HOST=your-redis-cluster.cache.amazonaws.com (or similar)
 
+      port: ${REDIS_PORT:6379}
+      # 6379 is Redis's default port — you almost never change this.
+      # Reads REDIS_PORT env var with 6379 as fallback.
+
+# -----------------------------------------------------------------------------
+# SERVER — Embedded Tomcat settings
+# Spring Boot runs Tomcat INSIDE your JAR — no separate app server needed.
+# -----------------------------------------------------------------------------
 server:
   port: 8080
+  # Which port Tomcat listens on. Your app is at http://localhost:8080
+  # Change this if something else (another app, a proxy) is already on 8080.
+  # Common alternatives: 8081, 9090, 3000.
+  # In production, you'd typically run behind a reverse proxy (nginx)
+  # on port 443, and this internal port doesn't matter as much.
 
+# -----------------------------------------------------------------------------
+# MANAGEMENT — Spring Boot Actuator endpoints
+# Actuator adds production-monitoring endpoints to your app.
+# By default it exposes NOTHING over HTTP for security.
+# You must explicitly whitelist each endpoint you want accessible.
+# -----------------------------------------------------------------------------
 management:
   endpoints:
     web:
       exposure:
         include: health,info,metrics
+        # Whitelist of Actuator endpoints exposed over HTTP:
+        #
+        #   GET /actuator/health  → { "status": "UP" }
+        #                           Used by load balancers and Docker health checks
+        #                           to know if the app is alive and ready for traffic.
+        #
+        #   GET /actuator/info    → Build version, git commit, custom info.
+        #                           Useful for knowing exactly what's deployed.
+        #
+        #   GET /actuator/metrics → JVM heap usage, CPU, active HTTP requests,
+        #                           DB connection pool stats, custom metrics.
+        #
+        # Everything else stays HIDDEN:
+        #   /actuator/env   → exposes all env vars including secrets — keep hidden
+        #   /actuator/beans → exposes internal Spring wiring — keep hidden
+        #   /actuator/shutdown → can kill the app — DEFINITELY keep hidden
+        #
+        # To expose everything (only in dev, never prod):
+        #   include: "*"
 
+# =============================================================================
+# NEXUS — Your own custom configuration namespace
+#
+# This is NOT a Spring key — Spring ignores keys it doesn't recognize.
+# These are YOUR app's settings, bound to a Java class via:
+#   @ConfigurationProperties(prefix = "nexus")
+#
+# That annotation tells Spring: "map all keys under `nexus:` into this class".
+# You get a fully typed, IDE-autocomplete-friendly config object in your code.
+# =============================================================================
 nexus:
+
   security:
     jwt-secret: ${JWT_SECRET:change-me-in-production}
+    # The secret key used to SIGN JWTs (JSON Web Tokens).
+    #
+    # JWT auth flow:
+    #   1. User logs in with username + password
+    #   2. Server validates credentials, creates a JWT signed with this secret
+    #   3. Client stores the JWT, sends it on every request:
+    #        Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
+    #   4. Server re-signs the incoming token with this secret and checks it matches
+    #      No database lookup needed — the signature IS the proof of validity.
+    #
+    # The default "change-me-in-production" is intentionally obvious.
+    # In production: JWT_SECRET=<cryptographically random 256-bit string>
+    # If this secret leaks, anyone can forge tokens and impersonate any user.
+
     jwt-expiration-ms: 86400000
+    # How long an access token is valid, in milliseconds.
+    # 86400000 ms = 86400 seconds = 1440 minutes = 24 hours
+    # After this time the token is rejected and the user must log in again.
+    # Shorter = more secure (stolen tokens expire faster), less convenient.
+    # Longer = more convenient, higher risk window if a token is stolen.
+
     home-subnets:
       - 192.168.0.0/16
+      # Private IPv4 range — typical home/office LAN (192.168.x.x)
+      # The /16 means the first 16 bits are fixed, so covers 192.168.0.0 → 192.168.255.255
       - 10.66.66.0/24
+      # A specific VPN or internal network subnet (10.66.66.x)
+      # The /24 means first 24 bits fixed, covers 10.66.66.0 → 10.66.66.255
+      #
+      # These are likely used for IP-based access rules — e.g., certain admin
+      # endpoints or features only accessible from trusted internal networks.
+      # CIDR notation (the /16, /24) is standard network range syntax.
+
   services:
     minio-url: ${MINIO_ENDPOINT:http://localhost:9000}
+    # MinIO is a self-hosted, S3-compatible object storage server.
+    # Used for storing files (uploads, avatars, documents, etc.)
+    # Your code talks to this URL using an S3-compatible SDK.
+    # In production: MINIO_ENDPOINT=https://minio.yourserver.com
+    # Or replace MinIO with real AWS S3 and point to https://s3.amazonaws.com
+
     ollama-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    # Ollama is a local LLM (Large Language Model) runner.
+    # It lets you run AI models (Llama, Mistral, etc.) locally.
+    # Your app makes HTTP requests to this URL to generate AI responses.
+    # Port 11434 is Ollama's default.
+    # In production: OLLAMA_BASE_URL=http://your-gpu-server:11434
+
+# =============================================================================
+# HOW THIS MAPS TO JAVA CODE
+# =============================================================================
+#
+# Spring Boot automatically maps spring.* keys to its internal config classes.
+# For your custom `nexus.*` keys, you'd create something like:
+#
+#   @ConfigurationProperties(prefix = "nexus")
+#   @Component
+#   public class NexusProperties {
+#
+#       private Security security;
+#       private Services services;
+#
+#       public static class Security {
+#           private String jwtSecret;           // nexus.security.jwt-secret
+#           private long jwtExpirationMs;       // nexus.security.jwt-expiration-ms
+#           private List<String> homeSubnets;   // nexus.security.home-subnets
+#       }
+#
+#       public static class Services {
+#           private String minioUrl;            // nexus.services.minio-url
+#           private String ollamaUrl;           // nexus.services.ollama-url
+#       }
+#   }
+#
+# Then inject it anywhere:
+#   @Autowired
+#   private NexusProperties nexusProperties;
+#   nexusProperties.getSecurity().getJwtSecret(); // returns the value from this file
+#
+# =============================================================================
+# OVERRIDING THIS FILE FOR DIFFERENT ENVIRONMENTS
+# =============================================================================
+#
+# Spring Boot supports profile-specific config files:
+#   application.yml           → base config (this file, always loaded)
+#   application-dev.yml       → overrides for local development
+#   application-prod.yml      → overrides for production
+#
+# Activate a profile with:
+#   SPRING_PROFILES_ACTIVE=prod java -jar nexus.jar
+#   or: ./gradlew bootRun --args='--spring.profiles.active=dev'
+#
+# You can also override ANY single value without a profile file:
+#   java -jar nexus.jar --server.port=9090
+#   or via environment variable: SERVER_PORT=9090
+#   (Spring converts env vars: dots → underscores, lowercase → uppercase)
+# =============================================================================
